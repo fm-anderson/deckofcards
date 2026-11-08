@@ -1,10 +1,10 @@
-use deckofcards::card_render::{render_cards, render_dealer_opening};
 use std::io::{self, Write};
 
 use deckofcards::blackjack::{BlackjackGame, GameState};
+use deckofcards::card_render::{render_cards, render_dealer_opening};
 
 fn draw_table(game: &BlackjackGame, reveal_dealer: bool) {
-    // Clear the terminal and move the cursor to the top-left.
+    // clear the terminal and move the cursor to the top-left.
     print!("\x1b[2J\x1b[H");
 
     println!("♠ CARDINAL — BLACKJACK\n");

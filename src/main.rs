@@ -1,10 +1,10 @@
 mod blackjack_cli;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, rejection::QueryRejection},
     http::StatusCode,
     routing::{get, post},
 };
@@ -13,16 +13,18 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 type SharedStore = Arc<Mutex<DeckStore>>;
+type ApiError = (StatusCode, Json<ErrorResponse>);
+type ApiResult<T> = Result<Json<T>, ApiError>;
+
+#[derive(Deserialize)]
+struct DrawQuery {
+    count: Option<usize>,
+}
 
 #[derive(Serialize)]
 struct DeckResponse {
     deck_id: String,
     remaining: usize,
-}
-
-#[derive(Deserialize)]
-struct DrawQuery {
-    count: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -32,16 +34,37 @@ struct DrawResponse {
     remaining: usize,
 }
 
-async fn create_deck(State(store): State<SharedStore>) -> Result<Json<DeckResponse>, StatusCode> {
+#[derive(Serialize)]
+struct ErrorResponse {
+    error: &'static str,
+}
+
+fn json_error(status: StatusCode, message: &'static str) -> ApiError {
+    (status, Json(ErrorResponse { error: message }))
+}
+
+fn parse_deck_id(id: &str) -> Result<Uuid, ApiError> {
+    Uuid::parse_str(id).map_err(|_| json_error(StatusCode::BAD_REQUEST, "Invalid deck ID"))
+}
+
+fn lock_store(store: &SharedStore) -> Result<MutexGuard<'_, DeckStore>, ApiError> {
+    store
+        .lock()
+        .map_err(|_| json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"))
+}
+
+async fn create_deck(State(store): State<SharedStore>) -> ApiResult<DeckResponse> {
     let mut store = store
         .lock()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"))?;
 
-    let id = store.create(true);
+    let id = store
+        .create(true)
+        .ok_or_else(|| json_error(StatusCode::SERVICE_UNAVAILABLE, "Deck capacity reached"))?;
 
     let remaining = store
         .get(&id)
-        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or_else(|| json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"))?
         .remaining();
 
     Ok(Json(DeckResponse {
@@ -53,14 +76,13 @@ async fn create_deck(State(store): State<SharedStore>) -> Result<Json<DeckRespon
 async fn get_deck(
     State(store): State<SharedStore>,
     Path(id): Path<String>,
-) -> Result<Json<DeckResponse>, StatusCode> {
-    let id = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+) -> ApiResult<DeckResponse> {
+    let id = parse_deck_id(&id)?;
+    let mut store = lock_store(&store)?;
 
-    let store = store
-        .lock()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let deck = store.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let deck = store
+        .get(&id)
+        .ok_or_else(|| json_error(StatusCode::NOT_FOUND, "Deck not found"))?;
 
     Ok(Json(DeckResponse {
         deck_id: id.to_string(),
@@ -71,23 +93,34 @@ async fn get_deck(
 async fn draw_cards(
     State(store): State<SharedStore>,
     Path(id): Path<String>,
-    Query(query): Query<DrawQuery>,
-) -> Result<Json<DrawResponse>, StatusCode> {
-    let id = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+    query: Result<Query<DrawQuery>, QueryRejection>,
+) -> ApiResult<DrawResponse> {
+    let id =
+        Uuid::parse_str(&id).map_err(|_| json_error(StatusCode::BAD_REQUEST, "Invalid deck ID"))?;
+
+    let Query(query) =
+        query.map_err(|_| json_error(StatusCode::BAD_REQUEST, "Invalid draw count"))?;
 
     let count = query.count.unwrap_or(1);
 
     if count == 0 {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "Count must be at least 1",
+        ));
     }
 
     let mut store = store
         .lock()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"))?;
 
-    let deck = store.get_mut(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let deck = store
+        .get_mut(&id)
+        .ok_or_else(|| json_error(StatusCode::NOT_FOUND, "Deck not found"))?;
 
-    let cards = deck.draw(count).ok_or(StatusCode::BAD_REQUEST)?;
+    let cards = deck
+        .draw(count)
+        .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "Not enough cards remaining"))?;
 
     Ok(Json(DrawResponse {
         deck_id: id.to_string(),
@@ -99,14 +132,13 @@ async fn draw_cards(
 async fn reset_deck(
     State(store): State<SharedStore>,
     Path(id): Path<String>,
-) -> Result<Json<DeckResponse>, StatusCode> {
-    let id = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+) -> ApiResult<DeckResponse> {
+    let id = parse_deck_id(&id)?;
+    let mut store = lock_store(&store)?;
 
-    let mut store = store
-        .lock()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let deck = store.get_mut(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let deck = store
+        .get_mut(&id)
+        .ok_or_else(|| json_error(StatusCode::NOT_FOUND, "Deck not found"))?;
 
     deck.reset_and_shuffle();
 
@@ -168,37 +200,121 @@ mod tests {
 
         let response = app.clone().oneshot(request).await.unwrap();
         let status = response.status();
-
         let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-
         let json = serde_json::from_slice(&body).unwrap();
-
         (status, json)
+    }
+
+    async fn assert_error(
+        app: &Router,
+        method: Method,
+        uri: &str,
+        expected_status: StatusCode,
+        expected_message: &str,
+    ) {
+        let (status, body) = request(app, method, uri).await;
+        assert_eq!(status, expected_status, "Unexpected status for {uri}");
+        assert_eq!(
+            body["error"], expected_message,
+            "Unexpected error for {uri}"
+        );
     }
 
     #[tokio::test]
     async fn complete_deck_workflow() {
-        let store = Arc::new(Mutex::new(DeckStore::new()));
-        let app = build_app(store);
+        let app = build_app(Arc::new(Mutex::new(DeckStore::new())));
+
         let (status, created) = request(&app, Method::POST, "/decks").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(created["remaining"], 52);
 
         let id = created["deck_id"].as_str().unwrap();
-        let draw_url = format!("/decks/{id}/draw?count=2");
-        let (status, drawn) = request(&app, Method::POST, &draw_url).await;
+        let url = format!("/decks/{id}/draw?count=2");
+        let (status, drawn) = request(&app, Method::POST, &url).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(drawn["cards"].as_array().unwrap().len(), 2);
         assert_eq!(drawn["remaining"], 50);
 
-        let deck_url = format!("/decks/{id}");
-        let (status, deck) = request(&app, Method::GET, &deck_url).await;
+        let url = format!("/decks/{id}");
+        let (status, deck) = request(&app, Method::GET, &url).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(deck["remaining"], 50);
 
-        let reset_url = format!("/decks/{id}/reset");
-        let (status, reset) = request(&app, Method::POST, &reset_url).await;
+        let url = format!("/decks/{id}/reset");
+        let (status, reset) = request(&app, Method::POST, &url).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(reset["remaining"], 52);
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_requests() {
+        let app = build_app(Arc::new(Mutex::new(DeckStore::new())));
+
+        let (status, created) = request(&app, Method::POST, "/decks").await;
+        assert_eq!(status, StatusCode::OK);
+
+        let id = created["deck_id"].as_str().unwrap();
+        let missing_id = "00000000-0000-0000-0000-000000000000";
+
+        assert_error(
+            &app,
+            Method::GET,
+            "/decks/not-a-uuid",
+            StatusCode::BAD_REQUEST,
+            "Invalid deck ID",
+        )
+        .await;
+
+        assert_error(
+            &app,
+            Method::GET,
+            &format!("/decks/{missing_id}"),
+            StatusCode::NOT_FOUND,
+            "Deck not found",
+        )
+        .await;
+
+        for (count, message) in [
+            ("abc", "Invalid draw count"),
+            ("0", "Count must be at least 1"),
+            ("53", "Not enough cards remaining"),
+        ] {
+            let url = format!("/decks/{id}/draw?count={count}");
+
+            assert_error(&app, Method::POST, &url, StatusCode::BAD_REQUEST, message).await;
+        }
+
+        assert_error(
+            &app,
+            Method::POST,
+            "/decks/not-a-uuid/reset",
+            StatusCode::BAD_REQUEST,
+            "Invalid deck ID",
+        )
+        .await;
+
+        let url = format!("/decks/{id}");
+        let (status, deck) = request(&app, Method::GET, &url).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(deck["remaining"], 52);
+    }
+
+    #[tokio::test]
+    async fn rejects_creation_at_capacity() {
+        let mut store = DeckStore::new();
+        for _ in 0..1_000 {
+            store.create(false).unwrap();
+        }
+
+        let app = build_app(Arc::new(Mutex::new(store)));
+        assert_error(
+            &app,
+            Method::POST,
+            "/decks",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Deck capacity reached",
+        )
+        .await;
     }
 }
