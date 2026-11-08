@@ -1,7 +1,7 @@
 use std::fmt;
 
-use crate::card::{Card, Rank};
-use crate::deck::Deck;
+use crate::cards::card::{Card, Rank};
+use crate::cards::deck::Deck;
 
 #[derive(Default)]
 pub struct Hand {
@@ -197,7 +197,7 @@ impl Default for BlackjackGame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::card::Suit;
+    use crate::cards::card::Suit;
     use std::collections::HashSet;
 
     fn hand(ranks: &[Rank]) -> Hand {

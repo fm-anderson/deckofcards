@@ -5,7 +5,7 @@ use std::{
 
 use uuid::Uuid;
 
-use crate::deck::Deck;
+use crate::cards::deck::Deck;
 
 const DECK_TTL: Duration = Duration::from_secs(60 * 60);
 const MAX_DECKS: usize = 1_000;

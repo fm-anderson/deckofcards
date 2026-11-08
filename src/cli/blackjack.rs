@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 
-use deckofcards::blackjack::{BlackjackGame, GameState};
-use deckofcards::card_render::{render_cards, render_dealer_opening};
+use deckofcards::cards::card_render::{render_cards, render_dealer_opening};
+use deckofcards::games::blackjack::{BlackjackGame, GameState};
 
 fn draw_table(game: &BlackjackGame, reveal_dealer: bool) {
     // clear the terminal and move the cursor to the top-left.

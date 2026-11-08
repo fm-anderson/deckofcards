@@ -1,4 +1,4 @@
-use crate::card::{Card, Rank, Suit};
+use crate::cards::card::{Card, Rank, Suit};
 use rand::seq::SliceRandom;
 
 pub struct Deck {

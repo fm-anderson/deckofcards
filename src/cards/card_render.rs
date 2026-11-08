@@ -1,4 +1,4 @@
-use crate::card::{Card, Suit};
+use crate::cards::card::{Card, Suit};
 
 pub fn render_card(card: Card) -> [String; 7] {
     let label = card.to_string();
