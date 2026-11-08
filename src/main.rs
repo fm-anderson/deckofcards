@@ -1,3 +1,5 @@
+mod blackjack_cli;
+
 use std::sync::{Arc, Mutex};
 
 use axum::{
@@ -125,15 +127,26 @@ fn build_app(store: SharedStore) -> Router {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    let store = Arc::new(Mutex::new(DeckStore::new()));
+    match std::env::args().nth(1).as_deref() {
+        Some("blackjack") => blackjack_cli::play(),
 
-    let app = build_app(store);
+        None | Some("serve") => {
+            let store = Arc::new(Mutex::new(DeckStore::new()));
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
+            let app = build_app(store);
 
-    println!("Listening on http://127.0.0.1:3000");
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
 
-    axum::serve(listener, app).await
+            println!("Listening on http://127.0.0.1:3000");
+
+            axum::serve(listener, app).await
+        }
+
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Usage: deckofcards [serve|blackjack]",
+        )),
+    }
 }
 
 #[cfg(test)]

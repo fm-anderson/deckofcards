@@ -1,5 +1,6 @@
 use crate::card::{Card, Rank};
 use crate::deck::Deck;
+use std::fmt;
 
 #[derive(Default)]
 pub struct Hand {
@@ -48,6 +49,24 @@ impl Hand {
     pub fn is_bust(&self) -> bool {
         self.score() > 21
     }
+
+    pub fn is_blackjack(&self) -> bool {
+        self.cards.len() == 2 && self.score() == 21
+    }
+}
+
+impl fmt::Display for Hand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, card) in self.cards.iter().enumerate() {
+            if index > 0 {
+                write!(f, " ")?;
+            }
+
+            write!(f, "{card}")?;
+        }
+
+        Ok(())
+    }
 }
 
 pub struct BlackjackGame {
@@ -83,12 +102,16 @@ impl BlackjackGame {
             }
         }
 
-        Self {
+        let mut game = Self {
             deck,
             player,
             dealer,
             state: GameState::PlayerTurn,
-        }
+        };
+
+        game.resolve_naturals();
+
+        game
     }
 
     pub fn player_hand(&self) -> &Hand {
@@ -109,7 +132,7 @@ impl BlackjackGame {
 
     pub fn hit(&mut self) -> Result<Card, &'static str> {
         if self.state != GameState::PlayerTurn {
-            return Err("Cannot hit after busting");
+            return Err("Round is already finished");
         }
 
         let card = self
@@ -122,6 +145,8 @@ impl BlackjackGame {
 
         if self.player.is_bust() {
             self.state = GameState::PlayerBust;
+        } else if self.player.score() == 21 {
+            self.stand()?;
         }
 
         Ok(card)
@@ -151,6 +176,15 @@ impl BlackjackGame {
         };
 
         Ok(self.state)
+    }
+
+    fn resolve_naturals(&mut self) {
+        self.state = match (self.player.is_blackjack(), self.dealer.is_blackjack()) {
+            (true, true) => GameState::Push,
+            (true, false) => GameState::PlayerWin,
+            (false, true) => GameState::DealerWin,
+            (false, false) => GameState::PlayerTurn,
+        };
     }
 }
 
@@ -221,27 +255,42 @@ mod tests {
     #[test]
     fn hitting_draws_cards_and_stops_after_bust() {
         let mut game = BlackjackGame::new();
-        assert_eq!(game.state(), GameState::PlayerTurn);
 
-        let initial_cards = game.player_hand().cards().len();
-        let initial_remaining = game.remaining();
-        game.hit().unwrap();
-        assert_eq!(game.player_hand().cards().len(), initial_cards + 1);
-        assert_eq!(game.remaining(), initial_remaining - 1);
-
-        while game.state() == GameState::PlayerTurn {
-            game.hit().unwrap();
-        }
-        assert_eq!(game.state(), GameState::PlayerBust);
+        game.deck = Deck::new();
+        game.player = Hand::default();
+        game.state = GameState::PlayerTurn;
+        game.player.add_card(Card {
+            rank: Rank::King,
+            suit: Suit::Clubs,
+        });
+        game.player.add_card(Card {
+            rank: Rank::Nine,
+            suit: Suit::Diamonds,
+        });
 
         let remaining = game.remaining();
+        let drawn = game.hit().unwrap();
+        assert_eq!(
+            drawn,
+            Card {
+                rank: Rank::King,
+                suit: Suit::Spades,
+            }
+        );
+
+        assert_eq!(game.player_hand().score(), 29);
+        assert_eq!(game.player_hand().cards().len(), 3);
+        assert_eq!(game.remaining(), remaining - 1);
+        assert_eq!(game.state(), GameState::PlayerBust);
+
         assert!(game.hit().is_err());
-        assert_eq!(game.remaining(), remaining);
+        assert_eq!(game.remaining(), remaining - 1);
     }
 
     #[test]
     fn standing_finishes_round_and_prevents_more_actions() {
         let mut game = BlackjackGame::new();
+        game.state = GameState::PlayerTurn;
 
         game.player = Hand::default();
         game.dealer = Hand::default();
@@ -272,5 +321,89 @@ mod tests {
         assert!(game.hit().is_err());
         assert!(game.stand().is_err());
         assert_eq!(game.remaining(), remaining);
+    }
+
+    #[test]
+    fn natural_blackjack_resolves_correctly() {
+        let card = |rank: Rank, suit: Suit| Card { rank, suit };
+
+        let mut game = BlackjackGame::new();
+
+        // player has blackjack; dealer has 19.
+        game.player = Hand::default();
+        game.dealer = Hand::default();
+
+        game.player.add_card(card(Rank::Ace, Suit::Spades));
+        game.player.add_card(card(Rank::King, Suit::Hearts));
+
+        game.dealer.add_card(card(Rank::Ten, Suit::Clubs));
+        game.dealer.add_card(card(Rank::Nine, Suit::Diamonds));
+
+        game.resolve_naturals();
+
+        assert_eq!(game.state(), GameState::PlayerWin);
+        assert!(game.hit().is_err());
+        assert!(game.stand().is_err());
+
+        // both have natural blackjack: push.
+        game.dealer = Hand::default();
+        game.dealer.add_card(card(Rank::Ace, Suit::Clubs));
+        game.dealer.add_card(card(Rank::Queen, Suit::Spades));
+
+        game.resolve_naturals();
+
+        assert_eq!(game.state(), GameState::Push);
+
+        // only dealer has blackjack.
+        game.player = Hand::default();
+        game.player.add_card(card(Rank::Nine, Suit::Hearts));
+        game.player.add_card(card(Rank::Ten, Suit::Diamonds));
+
+        game.resolve_naturals();
+
+        assert_eq!(game.state(), GameState::DealerWin);
+    }
+
+    #[test]
+    fn hitting_twenty_one_automatically_finishes_round() {
+        let mut game = BlackjackGame::new();
+
+        game.deck = Deck::new();
+        game.player = Hand::default();
+        game.dealer = Hand::default();
+        game.state = GameState::PlayerTurn;
+
+        // Player starts with 11.
+        game.player.add_card(Card {
+            rank: Rank::Six,
+            suit: Suit::Clubs,
+        });
+        game.player.add_card(Card {
+            rank: Rank::Five,
+            suit: Suit::Diamonds,
+        });
+
+        // Dealer starts with 18.
+        game.dealer.add_card(Card {
+            rank: Rank::Ten,
+            suit: Suit::Clubs,
+        });
+        game.dealer.add_card(Card {
+            rank: Rank::Eight,
+            suit: Suit::Diamonds,
+        });
+
+        let remaining = game.remaining();
+
+        game.hit().unwrap();
+
+        assert_eq!(game.player_hand().score(), 21);
+        assert!(!game.player_hand().is_blackjack());
+        assert_eq!(game.state(), GameState::PlayerWin);
+        assert_eq!(game.remaining(), remaining - 1);
+
+        // The round is complete. No further actions allowed.
+        assert!(game.hit().is_err());
+        assert!(game.stand().is_err());
     }
 }
