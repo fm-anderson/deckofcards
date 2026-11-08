@@ -5,11 +5,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use axum::{
     Json, Router,
     extract::{Path, Query, State, rejection::QueryRejection},
-    http::StatusCode,
+    http::{Method, StatusCode, header},
     routing::{get, post},
 };
 use deckofcards::{card::Card, deck_store::DeckStore};
 use serde::{Deserialize, Serialize};
+use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
 type SharedStore = Arc<Mutex<DeckStore>>;
@@ -149,11 +150,17 @@ async fn reset_deck(
 }
 
 fn build_app(store: SharedStore) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers([header::CONTENT_TYPE]);
+
     Router::new()
         .route("/decks", post(create_deck))
         .route("/decks/{id}", get(get_deck))
         .route("/decks/{id}/draw", post(draw_cards))
         .route("/decks/{id}/reset", post(reset_deck))
+        .layer(cors)
         .with_state(store)
 }
 
@@ -167,9 +174,10 @@ async fn main() -> std::io::Result<()> {
 
             let app = build_app(store);
 
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
-
-            println!("Listening on http://127.0.0.1:3000");
+            let address =
+                std::env::var("CARDINAL_BIND").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+            let listener = tokio::net::TcpListener::bind(address.as_str()).await?;
+            println!("Listening on http://{address}");
 
             axum::serve(listener, app).await
         }
