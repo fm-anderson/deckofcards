@@ -1,20 +1,30 @@
+use deckofcards::card_render::{render_cards, render_dealer_opening};
 use std::io::{self, Write};
 
 use deckofcards::blackjack::{BlackjackGame, GameState};
 
-pub fn play() -> io::Result<()> {
-    println!("Welcome to Blackjack!\n");
+fn draw_table(game: &BlackjackGame, reveal_dealer: bool) {
+    // Clear the terminal and move the cursor to the top-left.
+    print!("\x1b[2J\x1b[H");
 
+    println!("♠ CARDINAL — BLACKJACK\n");
+
+    if reveal_dealer {
+        println!("DEALER — Score: {}", game.dealer_hand().score());
+        println!("{}", render_cards(game.dealer_hand().cards()));
+    } else {
+        println!("DEALER");
+        println!("{}", render_dealer_opening(game.dealer_hand().cards()[0]));
+    }
+
+    println!("\nYOUR HAND — Score: {}", game.player_hand().score());
+    println!("{}", render_cards(game.player_hand().cards()));
+}
+
+pub fn play() -> io::Result<()> {
     loop {
         let mut game = BlackjackGame::new();
-
-        println!("Dealer: {} [Hidden]", game.dealer_hand().cards()[0]);
-
-        println!(
-            "You: {} (Score: {})",
-            game.player_hand(),
-            game.player_hand().score()
-        );
+        draw_table(&game, false);
 
         while game.state() == GameState::PlayerTurn {
             print!("\n[h] Hit  [s] Stand  [q] Quit > ");
@@ -29,12 +39,10 @@ pub fn play() -> io::Result<()> {
             match input.trim().to_ascii_lowercase().as_str() {
                 "h" | "hit" => match game.hit() {
                     Ok(card) => {
-                        println!("\nYou drew: {card}");
-                        println!(
-                            "Your hand: {} (Score: {})",
-                            game.player_hand(),
-                            game.player_hand().score()
-                        );
+                        if game.state() == GameState::PlayerTurn {
+                            draw_table(&game, false);
+                            println!("\nYou drew: {card}");
+                        }
                     }
                     Err(error) => println!("Error: {error}"),
                 },
@@ -54,19 +62,8 @@ pub fn play() -> io::Result<()> {
             }
         }
 
+        draw_table(&game, true);
         println!("\n--- Round Complete ---");
-
-        println!(
-            "Dealer: {} (Score: {})",
-            game.dealer_hand(),
-            game.dealer_hand().score()
-        );
-
-        println!(
-            "You: {} (Score: {})",
-            game.player_hand(),
-            game.player_hand().score()
-        );
 
         match game.state() {
             GameState::PlayerBust => println!("You busted! Dealer wins."),
