@@ -51,6 +51,17 @@ impl Deck {
     pub fn shuffle(&mut self) {
         self.cards.shuffle(&mut rand::rng());
     }
+
+    pub fn reset_and_shuffle(&mut self) {
+        *self = Self::new();
+        self.shuffle();
+    }
+}
+
+impl Default for Deck {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -84,5 +95,20 @@ mod tests {
         assert_eq!(actual.len(), 52);
         assert_eq!(actual, expected);
         assert_eq!(shuffled.remaining(), 0);
+    }
+
+    #[test]
+    fn reset_restores_full_deck() {
+        let mut deck = Deck::new();
+
+        deck.draw(10).unwrap();
+        assert_eq!(deck.remaining(), 42);
+
+        deck.reset_and_shuffle();
+        assert_eq!(deck.remaining(), 52);
+
+        // restored deck should allow drawing all 52 cards.
+        assert_eq!(deck.draw(52).unwrap().len(), 52);
+        assert_eq!(deck.remaining(), 0);
     }
 }

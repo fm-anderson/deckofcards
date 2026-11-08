@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum Suit {
     Clubs,
     Diamonds,
@@ -6,7 +8,7 @@ pub enum Suit {
     Spades,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum Rank {
     Ace,
     Two,
@@ -23,7 +25,7 @@ pub enum Rank {
     King,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct Card {
     pub rank: Rank,
     pub suit: Suit,

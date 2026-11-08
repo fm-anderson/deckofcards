@@ -35,6 +35,12 @@ impl DeckStore {
     }
 }
 
+impl Default for DeckStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
